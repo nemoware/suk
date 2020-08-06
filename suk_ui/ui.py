@@ -8,6 +8,7 @@ import pandas as pd
 import tensorflow as tf
 import params_flow as pf
 from tensorflow.python.keras.models import Model
+import altair as alt
 
 max_seq_len = 512
 model_name = "multi_cased_L-12_H-768_A-12"
@@ -112,7 +113,7 @@ def load_model():
         layer_name = 'lambda'
         embedding_model = Model(inputs=model.input, outputs=model.get_layer(layer_name).output)
         outlier_model = create_outlier_model(input_dim=768, encoding_dim=768, hidden_dim=256)
-        outlier_model.load_weights('best_model.h5')
+        outlier_model.load_weights('outlier_best_model_2020-08-05-659-0.019.h5')
 
     return session, model, embedding_model, outlier_model
 
@@ -173,8 +174,9 @@ def predict(text):
     outlier_embeddings = get_embeddings(embedding_model, tokenizer, [text])
     mse, mae = calculte_reconstruction_error(outlier_model, outlier_embeddings)
     print("MSE: " + str(mse) + " MAE: " + str(mae))
-    if mse > mse_threshold:
-        return [(np.float32(1), "Прочее")]
+    result = []
+    if mse[0] > mse_threshold:
+        result.append((np.float32(1), "Прочее"))
 
     pred_token_ids = get_token_ids(tokenizer, [text])
     probabilities = model.predict(pred_token_ids)[0]
@@ -182,7 +184,8 @@ def predict(text):
     print(predictions)
     print(probabilities)
     print(f"text: {text}\ncategory: {classes[predictions]} prob: {probabilities[predictions]}")
-    return sorted(zip(probabilities, classes), reverse=True)
+    result.extend(sorted(zip(probabilities, classes), reverse=True))
+    return result
 
 
 # predict("Требуется определить порядок возмещения вреда почве в случае выявления разливов нефти при првоедении очередной плановой проверки РПН, Акт составлен, предписание выдано. Не обжаловано")
@@ -191,7 +194,29 @@ def predict(text):
 st.title("СЮК")
 text = st.text_area("Текст обращения")
 if st.button("Определить тему") and text:
-    result = predict(text)
-    st.header("Результат")
-    for pred in result[:3]:
-        st.write(pred[1] + " " + str(pred[0].item()))
+    with st.spinner("Определение темы"):
+        result = predict(text)
+        st.header("Результат")
+        x = []
+        y = []
+        for pred in result[:3]:
+            # st.write(pred[1] + " " + str(pred[0].item()))
+            x.append(pred[1])
+            y.append(pred[0])
+
+        data = pd.DataFrame({
+            'Тема': x,
+            'Вероятность': y,
+        })
+        st.table(data)
+
+        chart = (
+            alt.Chart(data)
+                .mark_bar()
+                .encode(alt.Y("Тема"), alt.X("Вероятность"))
+                .properties(height=600, width=800)
+        )
+
+        text = chart.mark_text(align="left", baseline="middle", dx=3).encode(text="Вероятность")
+
+        st.altair_chart(chart + text)
