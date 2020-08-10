@@ -1,25 +1,40 @@
 import os
 
-import bert
-import keras
 import streamlit as st
-import numpy as np
 import pandas as pd
+import numpy as np
+
 import tensorflow as tf
-import params_flow as pf
-from tensorflow.python.keras.models import Model
+from tensorflow import keras
+
+import bert
+from bert import BertModelLayer
+from bert.loader import StockBertConfig, map_stock_config_to_params, load_stock_weights
+from bert.tokenization.bert_tokenization import FullTokenizer
+
 import altair as alt
 
 max_seq_len = 512
 model_name = "multi_cased_L-12_H-768_A-12"
-model_dir = bert.fetch_google_bert_model(model_name, "C:\work\suk_ui\.models")
+
+@st.cache(allow_output_mutation=True)
+def get_model_dir(model_name):
+    return bert.fetch_google_bert_model(model_name, ".models")
+
+
+model_dir = get_model_dir(model_name)
 model_ckpt = os.path.join(model_dir, "bert_model.ckpt")
 
-do_lower_case = not (model_name.find("cased") == 0 or model_name.find("multi_cased") == 0)
-bert.bert_tokenization.validate_case_matches_checkpoint(do_lower_case, model_ckpt)
-vocab_file = os.path.join(model_dir, "vocab.txt")
-print(f'Do lower case: {do_lower_case}')
-tokenizer = bert.bert_tokenization.FullTokenizer(vocab_file, do_lower_case)
+@st.cache(allow_output_mutation=True)
+def get_tokenizer(model_name, model_ckpt):
+    do_lower_case = not (model_name.find("cased") == 0 or model_name.find("multi_cased") == 0)
+    bert.bert_tokenization.validate_case_matches_checkpoint(do_lower_case, model_ckpt)
+    vocab_file = os.path.join(model_dir, "vocab.txt")
+    print(f'Do lower case: {do_lower_case}')
+    return bert.bert_tokenization.FullTokenizer(vocab_file, do_lower_case)
+
+
+tokenizer = get_tokenizer(model_name, model_ckpt)
 
 classes = ['Трудовое право',
            'Интеллектуальная собственность, ИТ, цифровые права',
@@ -35,10 +50,11 @@ classes = ['Трудовое право',
            'Недропользование (поиск, оценка месторождений УВС, разведка и добыча)']
 
 # This should not be hashed by Streamlit when using st.cache.
-TF_HASH_FUNCS = {
-    tf.compat.v1.Session : id
-}
+# TF_HASH_FUNCS = {
+#     tf.Session: id
+# }
 
+import params_flow as pf
 
 def create_model(max_seq_len, model_dir, model_ckpt, freeze=True, adapter_size=4):
     bert_params = bert.params_from_pretrained_ckpt(model_dir)
@@ -101,20 +117,34 @@ def get_token_ids_faster(tokenizer, sentences, max_seq_len=512):
 def get_token_ids(tokenizer, sentences):
     return get_token_ids_faster(tokenizer, sentences, max_seq_len=max_seq_len)
 
+import tensorflow.keras.backend as K
 
-@st.cache(allow_output_mutation=True, hash_funcs=TF_HASH_FUNCS)
+# @st.cache(allow_output_mutation=True, hash_funcs=TF_HASH_FUNCS)
+@st.cache(allow_output_mutation=True)
 def load_model():
-    config = tf.compat.v1.ConfigProto(allow_soft_placement=True)
-    session = tf.compat.v1.Session(config=config)
+    # config = tf.ConfigProto(allow_soft_placement=True)
+    # session = tf.Session(config=config)
+    #
+    #
+    # with session.as_default():
+    session = None
 
-    with session.as_default():
-        model = create_model(max_seq_len, model_dir, model_ckpt, adapter_size=6)
-        model.load_weights('final.h5')
-        layer_name = 'lambda'
-        embedding_model = Model(inputs=model.input, outputs=model.get_layer(layer_name).output)
-        outlier_model = create_outlier_model(input_dim=768, encoding_dim=768, hidden_dim=256)
-        outlier_model.load_weights('outlier_best_model_2020-08-05-659-0.019.h5')
+    model = create_model(max_seq_len, model_dir, model_ckpt, adapter_size=6)
+    model.load_weights('.models/final.h5')
+    # model._make_predict_function()
+    print('load main model')
 
+    layer_name = 'lambda'
+    embedding_model = keras.Model(inputs=model.input, outputs=model.get_layer(layer_name).output)
+    # embedding_model._make_predict_function()
+    print('load embeddings model')
+
+    outlier_model = create_outlier_model(input_dim=768, encoding_dim=768, hidden_dim=256)
+    outlier_model.load_weights('.models/outlier_best_model_2020-08-05-659-0.019.h5')
+    # outlier_model._make_predict_function()
+    print('load outlier model')
+
+    # session = K.get_session()
     return session, model, embedding_model, outlier_model
 
 
@@ -136,7 +166,7 @@ def create_outlier_model(input_dim, encoding_dim=256, hidden_dim=128):
     # decoder = keras.layers.Dropout(0.5)(decoder)
     # decoder = keras.layers.BatchNormalization()(decoder)
     decoder = keras.layers.Dense(input_dim, activation=tf.math.sin)(decoder)
-    autoencoder = Model(inputs=input_layer, outputs=decoder)
+    autoencoder = keras.Model(inputs=input_layer, outputs=decoder)
     autoencoder.build(input_shape=(None, input_dim))
 
     autoencoder.summary()
@@ -176,7 +206,7 @@ def predict(text):
     print("MSE: " + str(mse) + " MAE: " + str(mae))
     result = []
     if mse[0] > mse_threshold:
-        result.append((np.float32(1), "Прочее"))
+        result.append((np.float32(1.-abs(mse[0]-mse_threshold)), f"Прочее (MSE: {mse})"))
 
     pred_token_ids = get_token_ids(tokenizer, [text])
     probabilities = model.predict(pred_token_ids)[0]
@@ -185,39 +215,58 @@ def predict(text):
     print(probabilities)
     print(f"text: {text}\ncategory: {classes[predictions]} prob: {probabilities[predictions]}")
     result.extend(sorted(zip(probabilities, classes), reverse=True))
+    print(f'sorted: {result}')
     return result
 
 
 # predict("Требуется определить порядок возмещения вреда почве в случае выявления разливов нефти при првоедении очередной плановой проверки РПН, Акт составлен, предписание выдано. Не обжаловано")
 # predict("На основании ст.193 ТК РФ дисциплинарное взыскание применяется не позднее одного месяца со дня обнаружения проступка. С персональными нарушениями (проступками), когда вина конкретных людей очевидна, все понятно. Точкой отсчета будет считаться документ, фиксирующий событие (Акт нарушения, служебная записка). А что делать с Происшествиями?  Если на объекте случился пожар 01.06.  В течение 15 р.д. ведет работу комиссия по расследованию происшествий (Стандарт компании). В ходе работы комиссии производится разбирательство.  16.06. - результатом работы такой комиссии станет Акт, подписанный всеми членами. Только в этот момент становится понятно, кто персонально виновен.    Какая дата станет днем обнаружения проступка? В принципе, именно в этот момент хотелось бы начинать процесс применения дисциплинарного взыскания. Насколько это законно?   Или 15 р.д. работы комиссии, должны войти в озвученный ранее период в 1 месяц?")
 
+import seaborn as sns
+import matplotlib.pyplot as plt
+
 top = 3
-st.title("СЮК")
+st.title("Система Юридических Консультаций")
 text = st.text_area("Текст обращения")
-if st.button("Определить тему") and text:
+if st.button("Определить тему"):
     with st.spinner("Определение темы"):
         result = predict(text)
-        st.header("Результат")
-        x = []
-        y = []
-        for pred in result[:top]:
-            # st.write(pred[1] + " " + str(pred[0].item()))
-            x.append(pred[1])
-            y.append(pred[0])
 
-        data = pd.DataFrame({
-            'Тема': x,
-            'Вероятность': y,
-        })
-        st.table(data)
+    st.header("Результат")
+    x = []
+    y = []
+    for pred in result[:top]:
+        # st.write(pred[1] + " " + str(pred[0].item()))
+        x.append(pred[1])
+        y.append(pred[0])
 
-        chart = (
-            alt.Chart(data)
-                .mark_bar()
-                .encode(alt.Y("Тема"), alt.X("Вероятность"))
-                .properties(height=top * 50, width=800)
-        )
+    data = pd.DataFrame({
+        'Тема': x,
+        'Вероятность': y,
+    })
+    st.table(data)
 
-        text = chart.mark_text(align="left", baseline="middle", dx=3).encode(text="Вероятность")
+    # chart = (
+    #     alt.Chart(data)
+    #         .mark_bar()
+    #         .encode(alt.Y("Тема"), alt.X("Вероятность"))
+    #         .properties(height=top * 50, width=800)
+    # )
+    #
+    #
+    # text = chart.mark_text(align="left", baseline="middle", dx=3).encode(text="Вероятность")
+    # st.altair_chart(chart + text)
 
-        st.altair_chart(chart + text)
+
+
+    plt.figure(figsize=(8, 3))
+    bp = sns.barplot(x=y, y=x)
+    plt.title(f'Вероятные темы:', fontsize=14)
+    plt.ylabel('Тема', fontsize=12)
+    plt.xlabel('Вероятность', fontsize=12)
+    plt.yticks(range(len(x)), x)
+
+    # bp.set_xticklabels(bp.get_xticklabels(), rotation=45)
+    # plt.show()
+    st.pyplot()
+
