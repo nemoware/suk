@@ -12,7 +12,7 @@ from bert import BertModelLayer
 from bert.loader import StockBertConfig, map_stock_config_to_params, load_stock_weights
 from bert.tokenization.bert_tokenization import FullTokenizer
 
-import altair as alt
+import SessionState
 
 max_seq_len = 512
 model_name = "multi_cased_L-12_H-768_A-12"
@@ -222,12 +222,20 @@ def predict(text):
 # predict("Требуется определить порядок возмещения вреда почве в случае выявления разливов нефти при првоедении очередной плановой проверки РПН, Акт составлен, предписание выдано. Не обжаловано")
 # predict("На основании ст.193 ТК РФ дисциплинарное взыскание применяется не позднее одного месяца со дня обнаружения проступка. С персональными нарушениями (проступками), когда вина конкретных людей очевидна, все понятно. Точкой отсчета будет считаться документ, фиксирующий событие (Акт нарушения, служебная записка). А что делать с Происшествиями?  Если на объекте случился пожар 01.06.  В течение 15 р.д. ведет работу комиссия по расследованию происшествий (Стандарт компании). В ходе работы комиссии производится разбирательство.  16.06. - результатом работы такой комиссии станет Акт, подписанный всеми членами. Только в этот момент становится понятно, кто персонально виновен.    Какая дата станет днем обнаружения проступка? В принципе, именно в этот момент хотелось бы начинать процесс применения дисциплинарного взыскания. Насколько это законно?   Или 15 р.д. работы комиссии, должны войти в озвученный ранее период в 1 месяц?")
 
+
 import seaborn as sns
 import matplotlib.pyplot as plt
 
 top = 3
 st.title("Система Юридических Консультаций")
-text = st.text_area("Текст обращения")
+state = SessionState.get(key=0)
+if st.button('Очистить'):
+    state.key += 1
+
+ta_placeholder = st.empty()
+
+text = ta_placeholder.text_area("Текст обращения", height=300, value='', key=state.key)
+
 if st.button("Определить тему"):
     with st.spinner("Определение темы"):
         result = predict(text)
@@ -245,19 +253,6 @@ if st.button("Определить тему"):
         'Вероятность': y,
     })
     st.table(data)
-
-    # chart = (
-    #     alt.Chart(data)
-    #         .mark_bar()
-    #         .encode(alt.Y("Тема"), alt.X("Вероятность"))
-    #         .properties(height=top * 50, width=800)
-    # )
-    #
-    #
-    # text = chart.mark_text(align="left", baseline="middle", dx=3).encode(text="Вероятность")
-    # st.altair_chart(chart + text)
-
-
 
     plt.figure(figsize=(8, 3))
     bp = sns.barplot(x=y, y=x)
