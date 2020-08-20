@@ -226,7 +226,7 @@ def predict(text):
 import seaborn as sns
 import matplotlib.pyplot as plt
 
-top = 3
+threshold = 0.3
 st.title("Система Юридических Консультаций")
 state = SessionState.get(key=0)
 if st.button('Очистить'):
@@ -243,10 +243,11 @@ if st.button("Определить тему"):
     st.header("Результат")
     x = []
     y = []
-    for pred in result[:top]:
+    for pred in result:
         # st.write(pred[1] + " " + str(pred[0].item()))
-        x.append(pred[1])
-        y.append(pred[0])
+        if pred[0] > threshold:
+            x.append(pred[1])
+            y.append(pred[0])
 
     data = pd.DataFrame({
         'Тема': x,
