@@ -235,8 +235,11 @@ if st.button('Очистить'):
 ta_placeholder = st.empty()
 
 text = ta_placeholder.text_area("Текст обращения", height=300, value='', key=state.key)
+max_chars = 700
 
 if st.button("Определить тему"):
+    if len(text) > max_chars:
+        st.warning(f"Тема обращения,  текст, которого содержит более {max_chars} символов, может быть определена менее точно.")
     with st.spinner("Определение темы"):
         result = predict(text)
 
