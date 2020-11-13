@@ -17,7 +17,7 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 import params_flow as pf
 
-st.set_option('deprecation.showPyplotGlobalUse', False)
+# st.set_option('deprecation.showPyplotGlobalUse', False)
 
 
 @st.cache(allow_output_mutation=True)
@@ -168,10 +168,6 @@ def create_outlier_model(input_dim, encoding_dim=256, hidden_dim=128):
 
     return autoencoder
 
-def get_embeddings(embedding_model, tokenizer, vals):
-  token_ids = get_token_ids(tokenizer, vals)
-  return embedding_model.predict(token_ids)
-
 
 def calculte_reconstruction_error(outlier_model, embeddings):
   embeddings_pred = outlier_model.predict(embeddings)
@@ -179,6 +175,30 @@ def calculte_reconstruction_error(outlier_model, embeddings):
   mse = np.mean(np.power(embeddings - embeddings_pred, 2), axis=1)
   mae = np.mean(np.abs(embeddings_pred - embeddings), axis=1)
   return (mse, mae)
+
+
+@st.cache
+def predict(text, mse_threshold=0.05):
+    global model, embedding_model, outlier_model
+
+    pred_token_ids = get_token_ids(tokenizer, [text])
+
+    outlier_embeddings = embedding_model.predict(pred_token_ids)
+    mse, mae = calculte_reconstruction_error(outlier_model, outlier_embeddings)
+    print("MSE: " + str(mse) + " MAE: " + str(mae))
+    result = []
+    if mse[0] > mse_threshold:
+        result.append((np.float32(1.-abs(mse[0]-mse_threshold)), f"Прочее (MSE: {mse})"))
+    probabilities = model.predict(pred_token_ids)[0]
+    predictions = probabilities.argmax(axis=-1)
+    print(predictions)
+    print(probabilities)
+    print(f"text: {text}\ncategory: {classes[predictions]} prob: {probabilities[predictions]}")
+    result.extend(sorted(zip(probabilities, classes), reverse=True))
+    print(f'sorted: {result}')
+    return result
+
+
 
 ## Configuration
 max_seq_len = 512
@@ -223,25 +243,6 @@ session, model, embedding_model, outlier_model = load_model()
 
 mse_threshold = st.sidebar.number_input('Порог для аномалий:', min_value=0., max_value=1., step=0.001, value=0.037, format="%.3f")
 
-@st.cache
-def predict(text, mse_threshold=0.05):
-    outlier_embeddings = get_embeddings(embedding_model, tokenizer, [text])
-    mse, mae = calculte_reconstruction_error(outlier_model, outlier_embeddings)
-    print("MSE: " + str(mse) + " MAE: " + str(mae))
-    result = []
-    if mse[0] > mse_threshold:
-        result.append((np.float32(1.-abs(mse[0]-mse_threshold)), f"Прочее (MSE: {mse})"))
-
-    pred_token_ids = get_token_ids(tokenizer, [text])
-    probabilities = model.predict(pred_token_ids)[0]
-    predictions = probabilities.argmax(axis=-1)
-    print(predictions)
-    print(probabilities)
-    print(f"text: {text}\ncategory: {classes[predictions]} prob: {probabilities[predictions]}")
-    result.extend(sorted(zip(probabilities, classes), reverse=True))
-    print(f'sorted: {result}')
-    return result
-
 
 # predict("Требуется определить порядок возмещения вреда почве в случае выявления разливов нефти при првоедении очередной плановой проверки РПН, Акт составлен, предписание выдано. Не обжаловано")
 # predict("На основании ст.193 ТК РФ дисциплинарное взыскание применяется не позднее одного месяца со дня обнаружения проступка. С персональными нарушениями (проступками), когда вина конкретных людей очевидна, все понятно. Точкой отсчета будет считаться документ, фиксирующий событие (Акт нарушения, служебная записка). А что делать с Происшествиями?  Если на объекте случился пожар 01.06.  В течение 15 р.д. ведет работу комиссия по расследованию происшествий (Стандарт компании). В ходе работы комиссии производится разбирательство.  16.06. - результатом работы такой комиссии станет Акт, подписанный всеми членами. Только в этот момент становится понятно, кто персонально виновен.    Какая дата станет днем обнаружения проступка? В принципе, именно в этот момент хотелось бы начинать процесс применения дисциплинарного взыскания. Насколько это законно?   Или 15 р.д. работы комиссии, должны войти в озвученный ранее период в 1 месяц?")
@@ -266,7 +267,7 @@ max_chars = 700
 if c1.button("Определить тему"):
     stripped_text = text.strip('.!?- \n')
 
-    if text and len(stripped_text) > 5:
+    if len(stripped_text) > 5:
         if len(text) > max_chars:
             st.warning(f"Тема обращения, текст которого содержит более {max_chars} символов(здесь {len(text)}), может быть определена менее точно.")
         with st.spinner("Определение темы"):
@@ -298,32 +299,33 @@ if c1.button("Определить тему"):
         # st.altair_chart(chart + text)
 
 
-
-        plt.figure(figsize=(8, 3))
-        bp = sns.barplot(x=y, y=x)
-        plt.title(f'Вероятные темы:', fontsize=14)
+        fig, ax = plt.subplots(figsize=(8, 3))
+        # plt.figure(figsize=(8, 3))
+        bp = sns.barplot(ax=ax, x=y, y=x)
+        # plt.title(f'Вероятные темы:', fontsize=14)
+        ax.set_title(f'Вероятные темы:', fontsize=14)
         plt.ylabel('Тема', fontsize=12)
         plt.xlabel('Вероятность', fontsize=12)
         plt.yticks(range(len(x)), x)
 
         # bp.set_xticklabels(bp.get_xticklabels(), rotation=45)
         # plt.show()
-        st.pyplot()
+        st.pyplot(fig)
     else:
         if text:
             st_len = len(stripped_text)
             if 0 < st_len < 5:
                 st.error(f"Слишком короткий текст (длина: {st_len}).")
 
-        x = ['Прочее']
-else:
-    x = ['Прочее']
+#         x = ['Прочее']
+# else:
+#     x = ['Прочее']
 
 with st.beta_expander("Корректировки:", expanded=True):
-    if any("Прочее" in s for s in x):
-        x = ["Прочее"]
-    feedback_selected_categories = st.multiselect('Изменения тем:', options=classes+["Прочее"], default=x)
-    # feedback_selected_categories = st.multiselect('Изменения тем:', options=classes)
+    # if any("Прочее" in s for s in x):
+    #     x = ["Прочее"]
+    # feedback_selected_categories = st.multiselect('Изменения тем:', options=classes+["Прочее"], default=x)
+    feedback_selected_categories = st.multiselect('Изменения тем:', options=classes+['Прочее'])
     name = st.text_input("Автор(Опционально):")
     if st.button("Сохранить"):
         from pathlib import Path
@@ -354,4 +356,4 @@ with st.beta_expander("Корректировки:", expanded=True):
             if name:
                 data_stream.write(f'Автор:{name}')
 
-        st.write(f"Отзыв с категориями {feedback_selected_categories} сохранён.")
+        st.info(f"Отзыв с категориями {feedback_selected_categories} сохранён.")
